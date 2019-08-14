@@ -21,7 +21,7 @@ slow:
       snap: 1.0
 
   yaw:
-    speed: 0.15
-    acceleration: 0.2
+    speed: 0.3
+    acceleration: 0.3
     jerk: 1.0
     snap: 1.0
