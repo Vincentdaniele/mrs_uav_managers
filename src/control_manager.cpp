@@ -2114,7 +2114,10 @@ void ControlManager::bumperTimer(const ros::TimerEvent &event) {
 
   if (!is_initialized)
     return;
-
+  
+  if (!got_odometry || active_tracker_idx == null_tracker_idx)
+    return;
+  
   mrs_lib::Routine profiler_routine = profiler->createRoutine("bumperTimer", bumper_timer_rate_, 0.01, event);
 
   if (!bumper_enabled_ || !bumper_repulsion_enabled_) {
