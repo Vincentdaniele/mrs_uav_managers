@@ -1,7 +1,7 @@
 MpcController:
   address: "mrs_controllers/MpcController"
-  eland_threshold: 3.5
-  failsafe_threshold: 5.0
+  eland_threshold: 0.0
+  failsafe_threshold: 10.0
 
 FailsafeController:
   address: "mrs_controllers/FailsafeController"
