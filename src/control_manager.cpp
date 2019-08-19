@@ -36,6 +36,10 @@
 #include <mutex>
 #include <eigen3/Eigen/Eigen>
 #include <tf/transform_datatypes.h>
+#include <tf_conversions/tf_eigen.h>
+
+#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
 
 //}
 
@@ -221,6 +225,7 @@ private:
   ros::Publisher publisher_tilt_error;
   ros::Publisher publisher_mass_estimate;
   ros::Publisher publisher_control_error;
+  ros::Publisher publisher_rviz;
 
   ros::ServiceServer service_server_switch_tracker;
   ros::ServiceServer service_server_switch_controller;
@@ -490,6 +495,9 @@ private:
   double          elanding_cutoff_mass_factor_;
   double          landing_uav_mass_ = 0;
 
+  double initial_body_disturbance_x_;
+  double initial_body_disturbance_y_;
+
 private:
   mrs_lib::Profiler *profiler;
   bool               profiler_enabled_ = false;
@@ -634,6 +642,26 @@ void ControlManager::onInit() {
 
   param_loader.load_param("pirouette/speed", pirouette_speed_);
   param_loader.load_param("pirouette/timer_rate", pirouette_timer_rate_);
+
+  // | ------------- load the body integrator values ------------ |
+
+  param_loader.load_param("body_disturbance_x", initial_body_disturbance_x_);
+  param_loader.load_param("body_disturbance_y", initial_body_disturbance_y_);
+
+  mrs_msgs::AttitudeCommand::Ptr output_command(new mrs_msgs::AttitudeCommand);
+  last_attitude_cmd = output_command;
+
+  output_command->total_mass = uav_mass_;
+  output_command->mass_difference = 0.0;
+
+  output_command->disturbance_bx_b = initial_body_disturbance_x_;
+  output_command->disturbance_by_b = initial_body_disturbance_y_;
+  output_command->disturbance_wx_w = 0.0;
+  output_command->disturbance_wy_w = 0.0;
+  output_command->disturbance_bx_w = 0.0;
+  output_command->disturbance_by_w = 0.0;
+
+  output_command->thrust = min_thrust_null_tracker_;
 
   // --------------------------------------------------------------
   // |                        load trackers                       |
@@ -915,7 +943,7 @@ void ControlManager::onInit() {
   active_tracker_idx = null_tracker_idx;
 
   // --------------------------------------------------------------
-  // |           active the first controller on the list          |
+  // |          activate the first controller on the list         |
   // --------------------------------------------------------------
 
   ROS_INFO("[ControlManager]: Activating the first controller on the list (%s)", controller_names[eland_controller_idx].c_str());
@@ -991,6 +1019,7 @@ void ControlManager::onInit() {
   publisher_tilt_error        = nh_.advertise<std_msgs::Float64>("tilt_error_out", 1);
   publisher_mass_estimate     = nh_.advertise<std_msgs::Float64>("mass_estimate_out", 1);
   publisher_control_error     = nh_.advertise<nav_msgs::Odometry>("control_error_out", 1);
+  publisher_rviz              = nh_.advertise<visualization_msgs::MarkerArray>("visualization_marker_array_out", 1);
 
   // --------------------------------------------------------------
   // |                         subscribers                        |
@@ -1210,6 +1239,301 @@ void ControlManager::statusTimer(const ros::TimerEvent &event) {
       }
       catch (...) {
         ROS_ERROR("Exception caught during publishing topic %s.", publisher_mass_estimate.getTopic().c_str());
+      }
+    }
+  }
+
+  // --------------------------------------------------------------
+  // |                  publish the rviz markers                  |
+  // --------------------------------------------------------------
+  {
+    std::scoped_lock lock(mutex_last_attitude_cmd, mutex_odometry);
+
+    if (last_attitude_cmd != mrs_msgs::AttitudeCommand::Ptr() && got_odometry) {
+
+      visualization_msgs::MarkerArray msg_out;
+
+      double id = 0;
+
+      double multiplier = 1.0;
+
+      Eigen::Quaterniond quat_eigen(odometry.pose.pose.orientation.w, odometry.pose.pose.orientation.x, odometry.pose.pose.orientation.y,
+                                    odometry.pose.pose.orientation.z);
+
+      Eigen::Vector3d      vec3d;
+      geometry_msgs::Point point;
+
+      /* world x disturbance //{ */
+      {
+
+        visualization_msgs::Marker marker;
+
+        marker.header.frame_id = "local_origin";
+        marker.header.stamp    = ros::Time::now();
+        marker.ns              = "control_manager";
+        marker.id              = id++;
+        marker.type            = visualization_msgs::Marker::ARROW;
+        marker.action          = visualization_msgs::Marker::ADD;
+
+        /* position //{ */
+
+        marker.pose.position.x = 0.0;
+        marker.pose.position.y = 0.0;
+        marker.pose.position.z = 0.0;
+
+        //}
+
+        /* orientation //{ */
+
+        marker.pose.orientation.x = 0.0;
+        marker.pose.orientation.y = 0.0;
+        marker.pose.orientation.z = 0.0;
+        marker.pose.orientation.w = 1.0;
+
+        //}
+
+        /* origin //{ */
+        point.x = odometry_x;
+        point.y = odometry_y;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        /* tip //{ */
+
+        point.x = odometry_x + multiplier * last_attitude_cmd->disturbance_wx_w;
+        point.y = odometry_y;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        marker.scale.x = 0.05;
+        marker.scale.y = 0.05;
+        marker.scale.z = 0.05;
+
+        marker.color.a = 0.5;
+        marker.color.r = 1.0;
+        marker.color.g = 0.0;
+        marker.color.b = 0.0;
+
+        marker.mesh_resource = "package://pr2_description/meshes/base_v0/base.dae";
+
+        msg_out.markers.push_back(marker);
+      }
+
+      //}
+
+      /* world y disturbance //{ */
+      {
+
+        visualization_msgs::Marker marker;
+
+        marker.header.frame_id = "local_origin";
+        marker.header.stamp    = ros::Time::now();
+        marker.ns              = "control_manager";
+        marker.id              = id++;
+        marker.type            = visualization_msgs::Marker::ARROW;
+        marker.action          = visualization_msgs::Marker::ADD;
+
+        /* position //{ */
+
+        marker.pose.position.x = 0.0;
+        marker.pose.position.y = 0.0;
+        marker.pose.position.z = 0.0;
+
+        //}
+
+        /* orientation //{ */
+
+        marker.pose.orientation.x = 0.0;
+        marker.pose.orientation.y = 0.0;
+        marker.pose.orientation.z = 0.0;
+        marker.pose.orientation.w = 1.0;
+
+        //}
+
+        // defining points
+
+        /* origin //{ */
+        point.x = odometry_x;
+        point.y = odometry_y;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        /* tip //{ */
+
+        point.x = odometry_x;
+        point.y = odometry_y + multiplier * last_attitude_cmd->disturbance_wy_w;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        marker.scale.x = 0.05;
+        marker.scale.y = 0.05;
+        marker.scale.z = 0.05;
+
+        marker.color.a = 0.5;
+        marker.color.r = 1.0;
+        marker.color.g = 0.0;
+        marker.color.b = 0.0;
+
+        marker.mesh_resource = "package://pr2_description/meshes/base_v0/base.dae";
+
+        msg_out.markers.push_back(marker);
+      }
+
+      //}
+
+      /* body x disturbance //{ */
+      {
+
+        visualization_msgs::Marker marker;
+
+        marker.header.frame_id = "local_origin";
+        marker.header.stamp    = ros::Time::now();
+        marker.ns              = "control_manager";
+        marker.id              = id++;
+        marker.type            = visualization_msgs::Marker::ARROW;
+        marker.action          = visualization_msgs::Marker::ADD;
+
+        /* position //{ */
+
+        marker.pose.position.x = 0.0;
+        marker.pose.position.y = 0.0;
+        marker.pose.position.z = 0.0;
+
+        //}
+
+        /* orientation //{ */
+
+        marker.pose.orientation.x = 0.0;
+        marker.pose.orientation.y = 0.0;
+        marker.pose.orientation.z = 0.0;
+        marker.pose.orientation.w = 1.0;
+
+        //}
+
+        /* origin //{ */
+
+        point.x = odometry_x;
+        point.y = odometry_y;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        /* tip //{ */
+
+        vec3d << multiplier * last_attitude_cmd->disturbance_bx_b, 0, 0;
+        vec3d = quat_eigen * vec3d;
+
+        point.x = odometry_x + vec3d[0];
+        point.y = odometry_y + vec3d[1];
+        point.z = odometry_z + vec3d[2];
+
+        marker.points.push_back(point);
+
+        //}
+
+        marker.scale.x = 0.05;
+        marker.scale.y = 0.05;
+        marker.scale.z = 0.05;
+
+        marker.color.a = 0.5;
+        marker.color.r = 0.0;
+        marker.color.g = 1.0;
+        marker.color.b = 0.0;
+
+        marker.mesh_resource = "package://pr2_description/meshes/base_v0/base.dae";
+
+        msg_out.markers.push_back(marker);
+      }
+
+      //}
+
+      /* body y disturbance //{ */
+      {
+
+        visualization_msgs::Marker marker;
+
+        marker.header.frame_id = "local_origin";
+        marker.header.stamp    = ros::Time::now();
+        marker.ns              = "control_manager";
+        marker.id              = id++;
+        marker.type            = visualization_msgs::Marker::ARROW;
+        marker.action          = visualization_msgs::Marker::ADD;
+
+        /* position //{ */
+
+        marker.pose.position.x = 0.0;
+        marker.pose.position.y = 0.0;
+        marker.pose.position.z = 0.0;
+
+        //}
+
+        /* orientation //{ */
+
+        marker.pose.orientation.x = 0.0;
+        marker.pose.orientation.y = 0.0;
+        marker.pose.orientation.z = 0.0;
+        marker.pose.orientation.w = 1.0;
+
+        //}
+
+        /* origin //{ */
+
+        point.x = odometry_x;
+        point.y = odometry_y;
+        point.z = odometry_z;
+
+        marker.points.push_back(point);
+
+        //}
+
+        /* tip //{ */
+
+        vec3d << 0, multiplier * last_attitude_cmd->disturbance_by_b, 0;
+        vec3d = quat_eigen * vec3d;
+
+        point.x = odometry_x + vec3d[0];
+        point.y = odometry_y + vec3d[1];
+        point.z = odometry_z + vec3d[2];
+
+        marker.points.push_back(point);
+
+        //}
+
+        marker.scale.x = 0.05;
+        marker.scale.y = 0.05;
+        marker.scale.z = 0.05;
+
+        marker.color.a = 0.5;
+        marker.color.r = 0.0;
+        marker.color.g = 1.0;
+        marker.color.b = 0.0;
+
+        marker.mesh_resource = "package://pr2_description/meshes/base_v0/base.dae";
+
+        msg_out.markers.push_back(marker);
+      }
+
+      //}
+
+      try {
+        publisher_rviz.publish(msg_out);
+      }
+      catch (...) {
+        ROS_ERROR("Exception caught during publishing topic %s.", publisher_rviz.getTopic().c_str());
       }
     }
   }
@@ -1837,7 +2161,7 @@ void ControlManager::pirouetteTimer(const ros::TimerEvent &event) {
   double pirouette_n_steps   = pirouette_duration * pirouette_timer_rate_;
   double pirouette_step_size = (2 * M_PI) / pirouette_n_steps;
 
-  if (pirouette_iterator > pirouette_duration * pirouette_timer_rate_) {
+  if (rc_eland_triggered || failsafe_triggered || eland_triggered || (pirouette_iterator > pirouette_duration * pirouette_timer_rate_)) {
 
     pirouette_enabled_ = false;
     pirouette_timer.stop();
@@ -5039,7 +5363,7 @@ void ControlManager::publish(void) {
     desired_orientation.normalize();
     quaternionTFToMsg(desired_orientation, attitude_target.orientation);
 
-    attitude_target.thrust = 0.0;
+    attitude_target.thrust = min_thrust_null_tracker_;
 
     should_publish = true;
 
